@@ -1,0 +1,104 @@
+# network simulation stretching
+units           lj
+dimension       3
+boundary        p p p
+atom_style      molecular
+
+# file name
+variable        name index data
+# random seed
+variable        seed equal 1234
+# stretch rate
+variable        stretchrate equal 0.01
+# temperature
+variable        T equal 1
+# DPD parameters
+variable        dpdcutoff equal 1.2
+variable        gamma equal 2
+variable        ESOFT equal 3.53
+# variable force field parameters
+
+# variable timestep settings
+variable        dumpfreq equal 100
+variable        dumpfreq2 equal 100
+variable        tot_equil_step equal 10000
+variable        tot_stretch_step equal 40000
+variable        nfreq equal 20
+variable        nevery equal 1
+variable        nrepeat equal 5
+variable        test_dump_freq equal 100
+variable        test_thermo_freq equal 1000
+timestep        0.01
+
+# environment settings
+comm_modify     vel yes
+comm_modify     cutoff 5
+
+# input and output file name
+read_data       ${name}.data extra/bond/per/atom 10000 extra/special/per/atom 10000
+thermo          ${test_thermo_freq}
+thermo_style    custom step ly
+
+# force field parameters
+pair_style      hybrid/overlay soft 1.0 dpd ${T} ${dpdcutoff} ${seed}
+pair_coeff      * * dpd 25.0 ${gamma} 1.0
+pair_coeff      * * soft ${ESOFT} 1.0
+
+bond_style      harmonic
+bond_coeff      1 200 1.025
+special_bonds   lj 1.0 1.0 1.0 coul 1.0 1.0 1.0
+
+# make group
+group           chains type 1
+mass            * 1.0
+
+# reset timestep
+reset_timestep  0
+
+# set equilibration run speed initialization
+velocity        all create ${T} ${seed} dist gaussian
+
+# set boundary
+region          fixpart1 block INF INF 0 25 INF INF
+region          fixpart2 block INF INF 475 500 INF INF
+region          fixpart3 block 0 25 INF INF INF INF 
+region          fixpart4 block 475 500 INF INF INF INF 
+group           fixed1 region fixpart1
+group           fixed2 region fixpart2
+group           fixed3 region fixpart3
+group           fixed4 region fixpart4
+fix             yminfix fixed1 setforce 0.0 0.0 0.0
+fix             ymaxfix fixed2 setforce 0.0 0.0 0.0
+fix             xminfix fixed3 setforce 0.0 0.0 0.0
+fix             xmaxfix fixed4 setforce 0.0 0.0 0.0
+velocity        fixed1 set 0 0 0
+velocity        fixed2 set 0 0 0
+velocity        fixed3 set 0 0 0
+velocity        fixed4 set 0 0 0
+# equilibration run
+fix             bonding1 chains bond/create 1 1 1 0.9 1 prob 0.8 ${seed}
+fix             bondcut1 chains bond/break 1 1 2.5 prob 1.0 ${seed}
+dump            mydmp all atom ${dumpfreq} dump.1eqrun.xyz
+fix             1 all nve
+run             ${tot_equil_step}
+write_restart   equil.restart
+undump          mydmp
+
+# stretch settings
+group           mobile subtract all fixed1 fixed2
+velocity        all set 0 0 0
+unfix           yminfix
+unfix           ymaxfix
+unfix           xminfix
+unfix           xmaxfix
+
+fix             move1 fixed3 move linear -0.25 0 0 units box
+fix             move2 fixed4 move linear 0.25 0 0 units box
+
+fix             stretch_set all deform 100 x erate 0.001 units box remap v
+dump            mydump_stretch all atom ${dumpfreq} dump.2strun.xyz
+compute         stress_a all stress/atom NULL bond
+compute         s_a all reduce sum c_stress_a[1] c_stress_a[2] c_stress_a[3] c_stress_a[4] c_stress_a[5] c_stress_a[6]
+fix             stressout_a all ave/time ${nevery} ${nrepeat} ${nfreq} c_s_a[1] c_s_a[2] c_s_a[3] c_s_a[4] c_s_a[5] c_s_a[6] file all_stress_${seed}.txt
+run             ${tot_stretch_step}
+
